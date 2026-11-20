@@ -64,7 +64,7 @@ def package_lambda():
             "--entrypoint", "/bin/bash",
             "public.ecr.aws/lambda/python:3.12",
             "-c",
-            """cd /build && pip install --target ./package -r requirements.txt && pip install --target ./package --no-deps /database"""
+            """cd /build && pip install --target ./package -r requirements.txt && pip install --target ./package --no-deps /database""" + (f" && chown -R {os.getuid()}:{os.getgid()} /build" if hasattr(os, "getuid") else "")
         ]
         
         run_command(docker_cmd)
