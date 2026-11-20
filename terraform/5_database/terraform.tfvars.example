@@ -11,3 +11,6 @@ min_capacity = 0.5
 
 # Maximum capacity in ACUs (1.0 keeps costs low for development)
 max_capacity = 1.0
+# Run schema migrations and seed data automatically after the cluster is created
+# (runs backend/database/run_migrations.py and seed_data.py with uv)
+run_database_setup = true

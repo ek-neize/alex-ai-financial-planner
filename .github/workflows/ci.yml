@@ -84,6 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       agents: ${{ steps.agents.outputs.agents }}
+      migrations: ${{ steps.agents.outputs.migrations }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v4
@@ -96,20 +97,88 @@ jobs:
             reporter: [backend/reporter/**, backend/database/**]
             charter: [backend/charter/**, backend/database/**]
             retirement: [backend/retirement/**, backend/database/**]
+      - uses: dorny/paths-filter@v4
+        id: migrations
+        with:
+          filters: |
+            migrations: [backend/database/migrations/**, backend/database/run_migrations.py]
       - id: agents
         env:
           CHANGED: ${{ steps.filter.outputs.changes }}
+          MIGRATIONS: ${{ steps.migrations.outputs.migrations }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             CHANGED='["planner","tagger","reporter","charter","retirement"]'
+            MIGRATIONS=true
           fi
           echo "agents=$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "migrations=$MIGRATIONS" >> "$GITHUB_OUTPUT"
           echo "Agents to deploy: $CHANGED"
+          echo "Run migrations: $MIGRATIONS"
+
+  migrate:
+    name: Database migrations
+    needs: [changes, backend-tests, terraform, frontend]
+    if: needs.changes.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: migrate
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Find the database
+        id: db
+        run: |
+          if CLUSTER_ARN=$(aws rds describe-db-clusters --db-cluster-identifier alex-aurora-cluster \
+                --query 'DBClusters[0].DBClusterArn' --output text 2>&1); then
+            SECRETS=$(aws secretsmanager list-secrets \
+              --filters Key=name,Values=alex-aurora-credentials- \
+              --query 'SecretList[].ARN' --output text)
+            if [ "$(wc -w <<< "$SECRETS")" -ne 1 ]; then
+              echo "::error title=Database secret::Expected 1 alex-aurora-credentials-* secret, found: ${SECRETS:-none}"
+              exit 1
+            fi
+            echo "::add-mask::$SECRETS"
+            { echo "exists=true"; echo "cluster_arn=$CLUSTER_ARN"; echo "secret_arn=$SECRETS"; } >> "$GITHUB_OUTPUT"
+          elif grep -q DBClusterNotFoundFault <<< "$CLUSTER_ARN"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Migrations skipped::Aurora cluster is not deployed (stack torn down). terraform/5_database runs them when it's created."
+          else
+            echo "::error title=Cannot check database::$CLUSTER_ARN"
+            exit 1
+          fi
+
+      - uses: astral-sh/setup-uv@v7
+        if: steps.db.outputs.exists == 'true'
+
+      - name: Apply pending migrations
+        if: steps.db.outputs.exists == 'true'
+        working-directory: backend/database
+        env:
+          AURORA_CLUSTER_ARN: ${{ steps.db.outputs.cluster_arn }}
+          AURORA_SECRET_ARN: ${{ steps.db.outputs.secret_arn }}
+          AURORA_DATABASE: alex
+          DEFAULT_AWS_REGION: ${{ vars.AWS_REGION }}
+        run: uv run run_migrations.py
 
   deploy-agents:
     name: Deploy ${{ matrix.agent }}
-    needs: [changes, backend-tests, terraform, frontend]
-    if: needs.changes.outputs.agents != '[]' && needs.changes.outputs.agents != ''
+    # Agents deploy only after migrations succeed (or weren't needed), so new code
+    # never runs against an old schema
+    needs: [changes, migrate, backend-tests, terraform, frontend]
+    if: >-
+      !cancelled() && !failure()
+      && needs.changes.outputs.agents != '[]' && needs.changes.outputs.agents != ''
     runs-on: ubuntu-latest
     environment: production
     permissions:

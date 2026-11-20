@@ -26,7 +26,10 @@ def drop_all_tables(db: DataAPIClient):
         'accounts',
         'jobs',
         'instruments',
-        'users'
+        'users',
+        # Migration tracking: without dropping it, run_migrations.py would think
+        # the schema still exists and recreate nothing
+        'schema_migrations',
     ]
     
     for table in tables_to_drop:

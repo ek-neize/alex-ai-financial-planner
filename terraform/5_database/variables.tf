@@ -14,3 +14,8 @@ variable "max_capacity" {
   type        = number
   default     = 1
 }
+variable "run_database_setup" {
+  description = "Run schema migrations and load seed data automatically after the cluster is created (needs uv locally)"
+  type        = bool
+  default     = true
+}

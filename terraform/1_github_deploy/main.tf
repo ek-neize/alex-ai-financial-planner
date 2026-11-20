@@ -128,3 +128,48 @@ resource "aws_iam_role_policy" "deploy_agent_code" {
     ]
   })
 }
+
+# Run schema migrations (backend/database/run_migrations.py) before deploying
+# agents. The Data API runs SQL with the database credentials from Secrets
+# Manager, so the role needs the Data API calls plus read access to that secret.
+resource "aws_iam_role_policy" "run_migrations" {
+  name = "run-database-migrations"
+  role = aws_iam_role.github_deploy.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "FindCluster"
+        Effect = "Allow"
+        Action = ["rds:DescribeDBClusters"]
+        # Must match terraform/5_database
+        Resource = "arn:aws:rds:${var.aws_region}:${local.account_id}:cluster:alex-aurora-cluster"
+      },
+      {
+        Sid    = "RunMigrationsViaDataApi"
+        Effect = "Allow"
+        Action = [
+          "rds-data:ExecuteStatement",
+          "rds-data:BeginTransaction",
+          "rds-data:CommitTransaction",
+          "rds-data:RollbackTransaction",
+        ]
+        Resource = "arn:aws:rds:${var.aws_region}:${local.account_id}:cluster:alex-aurora-cluster"
+      },
+      {
+        Sid      = "ReadDatabaseCredentials"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = "arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:alex-aurora-credentials-*"
+      },
+      {
+        # The secret name has a random suffix; ListSecrets returns metadata only, never values
+        Sid      = "FindDatabaseSecret"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:ListSecrets"]
+        Resource = "*"
+      },
+    ]
+  })
+}

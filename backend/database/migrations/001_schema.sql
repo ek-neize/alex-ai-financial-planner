@@ -103,17 +103,17 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Add update triggers to tables with updated_at
-CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
+CREATE OR REPLACE TRIGGER update_users_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_instruments_updated_at BEFORE UPDATE ON instruments
+CREATE OR REPLACE TRIGGER update_instruments_updated_at BEFORE UPDATE ON instruments
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_accounts_updated_at BEFORE UPDATE ON accounts
+CREATE OR REPLACE TRIGGER update_accounts_updated_at BEFORE UPDATE ON accounts
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_positions_updated_at BEFORE UPDATE ON positions
+CREATE OR REPLACE TRIGGER update_positions_updated_at BEFORE UPDATE ON positions
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_jobs_updated_at BEFORE UPDATE ON jobs
+CREATE OR REPLACE TRIGGER update_jobs_updated_at BEFORE UPDATE ON jobs
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

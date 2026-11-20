@@ -239,9 +239,9 @@ Type `yes` when prompted. This will create:
 - Aurora Serverless v2 cluster with Data API enabled
 - Database credentials in Secrets Manager
 - Security group and subnet configuration
-- The `alex` database
+- The `alex` database, with its schema and seed data
 
-Deployment takes about 10-15 minutes. After deployment, Terraform will display important outputs including the cluster ARN and secret ARN.
+Deployment takes about 10-15 minutes. At the end, Terraform automatically creates the schema and loads the seed data (Steps 3 and 4 below), then displays important outputs including the cluster ARN and secret ARN.
 
 ### Save Your Configuration
 
@@ -286,42 +286,42 @@ You should see:
 Database version: PostgreSQL 15.x
 ```
 
-## Step 3: Run Database Migrations
+## Step 3: Database Migrations (automatic)
 
-Create the database schema:
+You don't need to do anything here: `terraform apply` in Step 1 already created the schema. Once the cluster is up, Terraform runs `backend/database/run_migrations.py` for you (see `terraform/5_database/migrations.tf`).
+
+The runner applies each file in `backend/database/migrations/` in order, inside a transaction, and records it in a `schema_migrations` table so it never runs twice. Terraform runs it again whenever a migration file changes, and the CI/CD pipeline runs it before deploying agents. A recreated database therefore always gets its tables.
+
+To check the state, or to run it by hand:
 
 ```bash
 # From backend/database directory
-uv run run_migrations.py
+uv run run_migrations.py --status   # show applied and pending migrations
+uv run run_migrations.py            # apply anything pending
 ```
 
 You should see:
 
 ```
-Starting migration: 001_schema.sql
-✅ Migration completed successfully
-All migrations completed!
+  ✅ applied  001_schema
+
+Nothing to apply.
 ```
 
-## Step 4: Load Seed Data
+**Changing the schema:** add a new file such as `migrations/002_add_watchlist.sql`. Never edit a migration that has already been applied; the runner refuses to continue if an applied file changes.
 
-Now let's populate the instruments table with 22 popular ETFs:
+## Step 4: Seed Data (automatic)
+
+Terraform also loads the 22 ETF instruments once, right after the cluster is created, by running `seed_data.py`. It isn't re-run on later applies, because that would reset the instrument prices the agents keep up to date.
+
+To reload the seed data by hand (it upserts, so it's safe to re-run):
 
 ```bash
 # From backend/database directory
 uv run seed_data.py
 ```
 
-You should see:
-
-```
-Seeding 22 instruments...
-✅ SPY - SPDR S&P 500 ETF
-✅ QQQ - Invesco QQQ Trust
-✅ BND - Vanguard Total Bond Market ETF
-[... more ETFs ...]
-✅ Successfully seeded 22 instruments
-```
+> Set `run_database_setup = false` in `terraform.tfvars` if you'd rather run both scripts yourself.
 
 ## Step 5: Create Test Data (Optional)
 

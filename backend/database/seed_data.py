@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv(override=True)
+load_dotenv(override=False)  # real env vars (e.g. from Terraform) win over .env
 
 # Get config from environment
 cluster_arn = os.environ.get("AURORA_CLUSTER_ARN")
@@ -466,6 +466,9 @@ def main():
 
     print("\n" + "=" * 50)
     print(f"Seeding complete: {success_count}/{len(INSTRUMENTS)} instruments loaded")
+    if success_count < len(INSTRUMENTS):
+        print(f"\n❌ {len(INSTRUMENTS) - success_count} instruments failed to load")
+        sys.exit(1)
 
     # Verify by querying
     print("\n🔍 Verifying data...")
