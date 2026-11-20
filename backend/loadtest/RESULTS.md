@@ -4,14 +4,15 @@ Load tests of the agent pipeline (SQS → Planner → Reporter / Charter / Retir
 
 ## Summary
 
-The first burst of 10 concurrent jobs **failed its latency target (p95 431s)**, and 15 sub-agent runs hit the 300s Lambda timeout. The load test exposed two bugs, plus a fixed sleep that added ~30s to every job. After fixing them, **a 25-job burst completed 25/25 with p95 71s, and throughput went from 1.2 to 18.4 jobs/minute**.
+The first burst of 10 concurrent jobs **failed its latency target (p95 431s)**, and 15 sub-agent runs hit the 300s Lambda timeout. The load test exposed two bugs, plus a fixed sleep that added ~30s to every job. After fixing them, **a 25-job burst completed 25/25 with p95 71s, and throughput went from 1.2 to 18.4 jobs/minute**. Running the sub-agents in parallel then cut median processing time by another 40% (57s → 34s): **p95 60s, 20.9 jobs/minute**.
 
 | Run | Jobs (burst) | Success | p50 end-to-end | p95 end-to-end | Throughput | Sub-agent errors | Bedrock cost/job |
 |---|---|---|---|---|---|---|---|
 | Baseline | 3 | 3/3 | 114s | 115s | 1.5/min | 0 | $0.02 |
 | Before fixes | 10 | 10/10* | 109s | **431s** ❌ | 1.2/min | **15 timeouts** | $0.03 |
 | After fixes | 10 | 10/10 | 69s | 75s | 7.4/min | 0 | $0.02 |
-| After fixes | 25 | **25/25** | 67s | **71s** | **18.4/min** | 0 | $0.02 |
+| After fixes | 25 | 25/25 | 67s | 71s | 18.4/min | 0 | $0.02 |
+| + parallel sub-agents | 25 | **25/25** | **52s** | **60s** | **20.9/min** | 0 | $0.02 |
 
 \* All 10 jobs were marked "completed" even though sub-agents had failed. The load test now checks each job actually has a report, charts and a retirement projection, and counts it as "incomplete" otherwise.
 
@@ -48,9 +49,21 @@ At 25 concurrent jobs there were no Lambda throttles, no Bedrock throttles and n
 | Lambda concurrency | 400 (account) | Peak 25 planners + up to 25 per sub-agent | Not a constraint at this scale |
 | Polygon.io (free tier) | 5 requests/min | Price lookups failed on every job | Non-fatal (stored prices are used); needs a paid plan or a shared cache |
 
-## Next optimisation
+## Parallel sub-agents (fixed after these runs)
 
-Processing is ~57s because the planner calls the reporter (~22s), charter (~10s) and retirement (~10s) agents **one after another**. Running them in parallel could bring processing to ~35s. That change is to the agent's tool-calling behaviour, so it should be its own experiment, measured with this load test.
+The Langfuse traces showed the planner's model already requesting `invoke_reporter`, `invoke_charter` and `invoke_retirement` **in a single turn**, and the Agents SDK running them concurrently. But all three tool spans also *ended* at the same moment, 51s later: the **sum** of the three agents, not the slowest one. The cause: `invoke_lambda_agent` made a blocking boto3 `invoke()` inside an `async` function, which froze the event loop, so each invoke had to finish before the next could start. The fix runs the call in a worker thread (`asyncio.to_thread`) ([commit](https://github.com/ek-neize/alex-ai-financial-planner/commit/)). A unit test with blocking stubs reproduced the problem (1.5s for 3 × 0.5s) and now passes in ~0.5s.
+
+| 25-job burst | Sequential | Parallel |
+|---|---|---|
+| Processing p50 / p95 | 57.0s / 60.3s | **34.0s / 42.8s** |
+| End-to-end p95 | 70.9s | **59.6s** |
+| Planner Lambda p95 duration | 61.0s | **43.7s** |
+| Throughput | 18.4/min | **20.9/min** |
+| Bedrock cost/job | $0.02 | $0.02 |
+
+In the new traces, the three tool spans start together and end independently (charter +17s, retirement +23s, reporter +25s), so the planner waits only as long as the slowest agent. End-to-end improved less than processing because queue wait rose from 9s to 19s: every container in the parallel run was a fresh cold start straight after a redeploy.
+
+Running sub-agents in parallel doesn't raise the SageMaker load per job: there's still one reporter per job. The endpoint throttled 1 of 25 reporters in one run and none in the other, so it's sitting right at its limit.
 
 ## Reproduce
 
