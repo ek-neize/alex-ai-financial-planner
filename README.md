@@ -66,6 +66,7 @@ graph LR
 - **Fixed Lambda packaging on Linux** ([commit](https://github.com/ek-neize/alex-ai-financial-planner/commit/447d20e)): the Docker build left root-owned files that broke later runs.
 - **Made the Bedrock region consistent** across agents, Terraform and config, and resized the researcher Lambda so its headless browser runs reliably.
 - **Added unit tests and a CI pipeline** ([workflow](.github/workflows/ci.yml)). The tests cover the parts of the system that don't depend on the LLM: the retirement Monte Carlo simulation and projections, the portfolio metrics and allocation maths, the tagger's structured-output validation, and the shared database schemas. GitHub Actions runs them on every push and pull request. It also checks formatting and validates all 7 Terraform stacks, and lints and builds the frontend.
+- **Fixed a bug in the retirement projections** that the new tests exposed. Projections were computed at 5-year milestones, and when the years to retirement weren't a multiple of 5, the years between the last milestone and retirement were never simulated. For a $250k portfolio retiring in 7 years, the projected value at year 10 was 15% too low. A regression test now checks the projections against a simple year-by-year model.
 - Diagnosed production issues across the stack: Bedrock region and model access, Terraform variables that were silently ignored, and missing database migrations after recreating Aurora.
 
 ## Roadmap

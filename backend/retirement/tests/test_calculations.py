@@ -90,6 +90,38 @@ def test_monte_carlo_expected_value_is_deterministic():
     assert result["expected_value_at_retirement"] == pytest.approx(100_000 * 1.02 + 10_000)
 
 
+def expected_projection_values(current_value, years_until_retirement, rate, milestones):
+    """Reference model, simulated year by year: save 10,000/yr until retirement,
+    then withdraw a fixed 4% of the balance at retirement each year
+    (recalculated at each 5-year milestone, as the agent does)."""
+    values = {}
+    value = current_value
+    income = 0.0
+    for year in range(0, max(milestones) + 1):
+        if year > 0:
+            if year <= years_until_retirement:
+                value = value * (1 + rate) + 10_000
+            else:
+                value = value * (1 + rate) - income
+        if year >= years_until_retirement and (year == years_until_retirement or year % 5 == 0):
+            income = value * 0.04  # set at retirement, then reset at each milestone
+        if year in milestones:
+            values[year] = value
+    return values
+
+
+@pytest.mark.parametrize("years_until_retirement", [7, 10, 12, 3])
+def test_projections_simulate_every_year(years_until_retirement):
+    # Regression test: when years_until_retirement wasn't a multiple of 5, the
+    # years between the last milestone and retirement were never simulated.
+    projections = generate_projections(100_000, years_until_retirement, ALL_CASH, current_age=40)
+    milestones = [p["year"] for p in projections]
+    expected = expected_projection_values(100_000, years_until_retirement, 0.02, milestones)
+
+    for p in projections:
+        assert p["portfolio_value"] == pytest.approx(expected[p["year"]], abs=0.01), p
+
+
 def test_projections_start_at_current_age_and_change_phase():
     projections = generate_projections(100_000, 10, ALL_EQUITY, current_age=50)
 

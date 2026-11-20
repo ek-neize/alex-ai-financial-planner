@@ -197,24 +197,32 @@ def generate_projections(
     # Only show key milestones (every 5 years)
     milestone_years = list(range(0, years_until_retirement + 31, 5))
 
+    previous_year = 0
     for year in milestone_years:
         age = current_age + year
 
+        # Simulate every year since the previous milestone. Any years before
+        # retirement are accumulation years, even if this milestone falls after
+        # retirement (e.g. retiring in year 7 with milestones at 5 and 10).
+        accumulation_years = max(0, min(year, years_until_retirement) - previous_year)
+        for _ in range(accumulation_years):
+            portfolio_value *= 1 + expected_return
+            portfolio_value += 10000
+
         if year <= years_until_retirement:
-            # Calculate accumulation
-            for _ in range(min(5, year)):
-                portfolio_value *= 1 + expected_return
-                portfolio_value += 10000
             phase = "accumulation"
             annual_income = 0
         else:
-            # Calculate retirement withdrawals
+            # Withdrawals are based on the balance at retirement (or at the
+            # previous milestone, once retired)
             withdrawal_rate = 0.04
             annual_income = portfolio_value * withdrawal_rate
-            years_in_retirement = min(5, year - years_until_retirement)
+            years_in_retirement = year - max(previous_year, years_until_retirement)
             for _ in range(years_in_retirement):
                 portfolio_value = portfolio_value * (1 + expected_return) - annual_income
             phase = "retirement"
+
+        previous_year = year
 
         if portfolio_value > 0:
             projections.append(
