@@ -84,7 +84,7 @@ graph LR
 - [x] Database migrations run automatically as part of deployment
 - [x] Load testing for the agent pipeline
 - [x] Run the sub-agents in parallel: processing 57s → 34s, measured ([load test results](backend/loadtest/RESULTS.md))
-- [ ] Retry SageMaker throttling in the reporter, which is the next bottleneck at ~25 concurrent jobs
+- [x] Retry SageMaker throttling in the reporter: cold-burst failures 65% → 8%, measured ([results](backend/loadtest/RESULTS.md#sagemaker-throttling))
 
 ## Running it yourself
 

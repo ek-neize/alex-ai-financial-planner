@@ -16,11 +16,12 @@ from agents.extensions.models.litellm_model import LitellmModel
 logger = logging.getLogger()
 
 # The embedding endpoint is SageMaker Serverless with a small concurrency limit
-# (terraform/2_sagemaker max_concurrency). Under load, concurrent reporters get
-# ThrottlingException. boto3's default (legacy) retries back off for well under a
-# second, so a throttled report silently lost its market research (1 of 25 in
-# the load test). Standard mode uses exponential backoff with jitter, which
-# spreads competing retries out: up to ~30s here, within the 300s budget.
+# (terraform/2_sagemaker max_concurrency). While it's cold, a burst of concurrent
+# reporters gets ThrottlingException, and a throttled report silently loses its
+# market research (1 of 25 in the load test). With boto3's default (legacy)
+# retries, 39 of 60 requests in two cold 30-request bursts still failed. Standard
+# mode (exponential backoff with jitter, up to ~30s here, within the 300s budget)
+# cut that to 5 of 60. See backend/loadtest/RESULTS.md.
 SAGEMAKER_CONFIG = Config(retries={"mode": "standard", "total_max_attempts": 6})
 
 

@@ -43,7 +43,7 @@ At 25 concurrent jobs there were no Lambda throttles, no Bedrock throttles and n
 
 | Resource | Limit | Observed at 25 jobs | Outlook |
 |---|---|---|---|
-| SageMaker Serverless (embeddings) | 10 concurrent requests | **1 of 25 reporters throttled**; it silently wrote its report without market research | First bottleneck. Raise `max_concurrency`, or retry with backoff in `get_market_insights` |
+| SageMaker Serverless (embeddings) | `max_concurrency` 2 (account quota: 10 across all serverless endpoints) | **1 of 25 reporters throttled**; it silently wrote its report without market research | First bottleneck. Mitigated with retries, see [SageMaker throttling](#sagemaker-throttling) |
 | Bedrock Nova Pro (cross-region) | 500 requests/min, 2M tokens/min | ~120 requests/min, ~190k tokens/min, 0 throttles | Roughly 100 concurrent jobs before throttling (estimate) |
 | Aurora Serverless v2 | max 1 ACU (tfvars) | Reached 1 ACU, with no visible latency impact | Raise `max_capacity` before testing beyond ~25 concurrent jobs |
 | Lambda concurrency | 400 (account) | Peak 25 planners + up to 25 per sub-agent | Not a constraint at this scale |
@@ -64,6 +64,23 @@ The Langfuse traces showed the planner's model already requesting `invoke_report
 In the new traces, the three tool spans start together and end independently (charter +17s, retirement +23s, reporter +25s), so the planner waits only as long as the slowest agent. End-to-end improved less than processing because queue wait rose from 9s to 19s: every container in the parallel run was a fresh cold start straight after a redeploy.
 
 Running sub-agents in parallel doesn't raise the SageMaker load per job: there's still one reporter per job. The endpoint throttled 1 of 25 reporters in one run and none in the other, so it's sitting right at its limit.
+
+## SageMaker throttling
+
+The embedding endpoint's Terraform set `max_concurrency = 2`, well below the 10 the capacity table assumed. When a reporter is throttled, `get_market_insights` logs the error and the report is written without market research, so the job still looks successful. (The load test now counts these: "Reports without market insights".)
+
+**Throttling only happens when the endpoint is cold.** On a warm endpoint, bursts of 30 and 100 concurrent requests at concurrency 2 and 5 all succeeded, with or without retries. A cold endpoint takes a few seconds to provision, and a burst arriving in that window gets throttled.
+
+The test: four 30-request bursts, each after 20 minutes idle so the endpoint had scaled to zero (confirmed by the first response taking 2–10s instead of ~0.3s). Configs alternated so warm-up order couldn't favour either one. One client per request, like separate reporter Lambdas.
+
+| Retry config | Run 1 | Run 2 | Total throttled | Slowest request |
+|---|---|---|---|---|
+| boto3 default (legacy, 5 attempts) | 19/30 | 20/30 | **39/60 (65%)** | 20s |
+| `standard`, 6 attempts (reporter) | 0/30 | 5/30 | **5/60 (8%)** | 29s |
+
+Standard mode's jittered exponential backoff spreads competing retries out, so most of them land after the endpoint is warm. It costs up to ~30s on an unlucky request, which fits easily in the reporter's 300s timeout ([commit](https://github.com/ek-neize/alex-ai-financial-planner/commit/126b1dd)).
+
+Retries alone don't remove the problem: 8% of a cold burst still fails. To go further, raise `max_concurrency` in `terraform/2_sagemaker` (now a variable, default 2). Check the account quota first, because it is shared by every serverless endpoint in the account.
 
 ## Reproduce
 
