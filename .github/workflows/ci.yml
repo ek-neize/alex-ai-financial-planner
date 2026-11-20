@@ -4,13 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual run: tests everything, then redeploys all agents
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs, but never cancel a run on main that may be deploying
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   backend-tests:
@@ -70,3 +73,96 @@ jobs:
         env:
           # Placeholder in the valid publishable-key format; real keys are only used at deploy time.
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
+
+  # ---------------------------------------------------------------------------
+  # Continuous deployment of the agent Lambdas' code
+  # ---------------------------------------------------------------------------
+
+  changes:
+    name: Detect changed agents
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      agents: ${{ steps.agents.outputs.agents }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # Every agent bundles the shared database package, so a change there redeploys all of them
+          filters: |
+            planner: [backend/planner/**, backend/database/**]
+            tagger: [backend/tagger/**, backend/database/**]
+            reporter: [backend/reporter/**, backend/database/**]
+            charter: [backend/charter/**, backend/database/**]
+            retirement: [backend/retirement/**, backend/database/**]
+      - id: agents
+        env:
+          CHANGED: ${{ steps.filter.outputs.changes }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CHANGED='["planner","tagger","reporter","charter","retirement"]'
+          fi
+          echo "agents=$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "Agents to deploy: $CHANGED"
+
+  deploy-agents:
+    name: Deploy ${{ matrix.agent }}
+    needs: [changes, backend-tests, terraform, frontend]
+    if: needs.changes.outputs.agents != '[]' && needs.changes.outputs.agents != ''
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write # to request the OIDC token for AWS
+    concurrency:
+      group: deploy-${{ matrix.agent }}
+      cancel-in-progress: false # never interrupt a deploy halfway
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: ${{ fromJSON(needs.changes.outputs.agents) }}
+    env:
+      FUNCTION: alex-${{ matrix.agent }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # The stack is torn down when not in use (to save cost); skip instead of failing
+      - name: Check the function is deployed
+        id: check
+        run: |
+          if aws lambda get-function --function-name "$FUNCTION" > /dev/null 2>&1; then
+            echo "deployed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deployed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy skipped::$FUNCTION is not deployed (stack torn down), nothing to update."
+          fi
+
+      - uses: astral-sh/setup-uv@v6
+        if: steps.check.outputs.deployed == 'true'
+
+      - name: Package with Docker (Lambda Python 3.12 image)
+        if: steps.check.outputs.deployed == 'true'
+        working-directory: backend/${{ matrix.agent }}
+        run: uv run package_docker.py
+
+      - name: Upload package and update function code
+        if: steps.check.outputs.deployed == 'true'
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          BUCKET="alex-lambda-packages-${ACCOUNT_ID}"
+          KEY="${{ matrix.agent }}/${{ matrix.agent }}_lambda.zip"
+
+          aws s3 cp "backend/${{ matrix.agent }}/${{ matrix.agent }}_lambda.zip" "s3://${BUCKET}/${KEY}"
+          aws lambda update-function-code \
+            --function-name "$FUNCTION" \
+            --s3-bucket "$BUCKET" --s3-key "$KEY" \
+            --query '{Version: Version, CodeSha256: CodeSha256, LastModified: LastModified}' \
+            --output table
+          aws lambda wait function-updated-v2 --function-name "$FUNCTION"
+          echo "::notice title=Deployed::$FUNCTION updated to ${GITHUB_SHA::7}"

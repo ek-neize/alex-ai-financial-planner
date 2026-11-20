@@ -41,7 +41,7 @@ def package_lambda():
         # Export exact requirements from uv.lock (excluding the editable database package)
         print("Exporting requirements from uv.lock...")
         requirements_result = run_command(
-            ["uv", "export", "--no-hashes", "--no-emit-project"],
+            ["uv", "export", "--no-hashes", "--no-emit-project", "--no-dev"],
             cwd=str(planner_dir)
         )
 

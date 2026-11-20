@@ -1,0 +1,6 @@
+aws_region        = "us-east-1"
+github_repository = "your-github-username/your-repo-name"
+
+# Leave false if your account already has a token.actions.githubusercontent.com
+# OIDC provider (IAM > Identity providers); only one is allowed per account.
+create_oidc_provider = false

@@ -55,6 +55,7 @@ graph LR
 - **Aurora Data API** instead of VPC networking, so Lambdas reach the database over HTTPS with IAM and Secrets Manager.
 - **One Terraform stack per layer** (`terraform/2_sagemaker` … `terraform/8_enterprise`), so each part can be deployed, debugged and destroyed independently.
 - **Remote Terraform state in S3 with native locking.** One versioned, encrypted bucket holds the state for every stack, so state survives a lost laptop, two runs can never write at once, and CI can read it. The bucket is created by a small bootstrap stack (`terraform/0_state_bucket`), and S3 lock files replace the usual DynamoDB lock table.
+- **Code deploys are automatic; infrastructure changes are reviewed.** Merging to `main` redeploys the code of the agents that changed, through a GitHub Actions role that can only update those 5 functions. Changes to the infrastructure itself still go through a manual `terraform plan` and `apply`.
 - **Each agent uses either structured outputs or tools, never both**, to work around a current LiteLLM/Bedrock limitation.
 
 ## What I added
@@ -68,6 +69,7 @@ graph LR
 - **Made the Bedrock region consistent** across agents, Terraform and config, and resized the researcher Lambda so its headless browser runs reliably.
 - **Added unit tests and a CI pipeline** ([workflow](.github/workflows/ci.yml)). The tests cover the parts of the system that don't depend on the LLM: the retirement Monte Carlo simulation and projections, the portfolio metrics and allocation maths, the tagger's structured-output validation, and the shared database schemas. GitHub Actions runs them on every push and pull request. It also checks formatting and validates all the Terraform stacks, and lints and builds the frontend.
 - **Moved Terraform state from local files to S3** ([bootstrap stack](terraform/0_state_bucket/main.tf)). The state bucket has versioning, encryption, blocked public access, an HTTPS-only policy and `prevent_destroy`. All 7 stacks use S3-native locking, which I tested by running two plans at once: the second was refused. The account-specific bucket name lives in a gitignored `backend.hcl`, so no account details are in the repo. The frontend stack now reads the database and agent outputs from S3 instead of from sibling directories on disk.
+- **Added continuous deployment for the agent Lambdas** ([workflow](.github/workflows/ci.yml), [IAM role](terraform/1_github_deploy/main.tf)). After every CI job passes on `main`, the pipeline works out which agents changed (a change to the shared database package redeploys all 5). It builds each changed agent in the Lambda Docker image and updates the function code. GitHub authenticates to AWS through OIDC, so there are no stored AWS keys, and the role trusts only this repo's `production` environment, which only `main` can deploy to. When the stack is torn down to save cost, the deploy job skips itself instead of failing. Along the way I stopped dev dependencies (pytest) from being bundled into the Lambda packages.
 - **Fixed a bug in the retirement projections** that the new tests exposed. Projections were computed at 5-year milestones, and when the years to retirement weren't a multiple of 5, the years between the last milestone and retirement were never simulated. For a $250k portfolio retiring in 7 years, the projected value at year 10 was 15% too low. A regression test now checks the projections against a simple year-by-year model.
 - Diagnosed production issues across the stack: Bedrock region and model access, Terraform variables that were silently ignored, and missing database migrations after recreating Aurora.
 
@@ -75,13 +77,16 @@ graph LR
 
 - [x] CI with GitHub Actions: unit tests, Terraform validation and a frontend build on every push and PR
 - [x] Terraform remote state in S3 with locking
-- [ ] Continuous deployment: Lambdas deploy automatically on merge (needs remote state first)
+- [x] Continuous deployment: agent Lambdas deploy automatically on merge (OIDC, least-privilege role)
+- [ ] Continuous deployment for the API Lambda, the researcher container and the frontend
 - [ ] Database migrations run automatically as part of deployment
 - [ ] Load testing for the agent pipeline
 
 ## Running it yourself
 
 You need an AWS account with Bedrock model access, Docker, Terraform, uv, Node.js and a Clerk account. The step-by-step deployment guides are in [`guides/`](guides/), starting with [`1_permissions.md`](guides/1_permissions.md). First create the state bucket with `terraform/0_state_bucket` (see Step 0 in [`2_sagemaker.md`](guides/2_sagemaker.md)). Then, in each `terraform/` directory, copy `terraform.tfvars.example` to `terraform.tfvars`, fill it in, and run `terraform init -backend-config=../backend.hcl`.
+
+**Optional CD:** deploy `terraform/1_github_deploy` (set `github_repository` in its tfvars). Then create a GitHub environment called `production`, limited to `main`, with the variables `AWS_DEPLOY_ROLE_ARN` (from `terraform output`) and `AWS_REGION`. Once CD is on, package the agents before running `terraform apply` in `6_agents` by hand, otherwise an old local zip can overwrite code the pipeline deployed.
 
 **Cost:** while it's deployed, Aurora is the main cost. Run `terraform destroy` in each directory, from 8 down to 2, when you're not using it.
 
