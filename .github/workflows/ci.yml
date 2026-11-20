@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [database, tagger, reporter, charter, retirement, loadtest]
+        project: [database, planner, tagger, reporter, charter, retirement, loadtest]
     defaults:
       run:
         working-directory: backend/${{ matrix.project }}

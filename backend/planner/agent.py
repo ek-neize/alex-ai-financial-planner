@@ -5,6 +5,7 @@ Financial Planner Orchestrator Agent - coordinates portfolio analysis across spe
 import os
 import json
 import boto3
+from botocore.config import Config
 import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime
@@ -16,7 +17,15 @@ from agents.extensions.models.litellm_model import LitellmModel
 logger = logging.getLogger()
 
 # Initialize Lambda client
-lambda_client = boto3.client("lambda")
+# Sub-agents run for up to 300s (their Lambda timeout). boto3's defaults (60s read
+# timeout, then retry) re-invoked any sub-agent that ran past 60s while the first
+# call was still running: under load, one slow reporter became up to five,
+# each burning Bedrock tokens and writing results. Wait out the full timeout
+# and never auto-retry, because a sub-agent run isn't safe to repeat.
+lambda_client = boto3.client(
+    "lambda",
+    config=Config(read_timeout=310, connect_timeout=10, retries={"total_max_attempts": 1, "mode": "standard"}),
+)
 
 # Lambda function names from environment
 TAGGER_FUNCTION = os.getenv("TAGGER_FUNCTION", "alex-tagger")
@@ -52,6 +61,13 @@ async def invoke_lambda_agent(
         )
 
         result = json.loads(response["Payload"].read())
+
+        # A crashed or timed-out sub-agent still returns HTTP 200, with the error in
+        # the payload and FunctionError set; don't report that as success
+        if response.get("FunctionError"):
+            message = result.get("errorMessage", str(result)) if isinstance(result, dict) else str(result)
+            logger.error(f"{agent_name} failed: {message}")
+            return {"error": f"{agent_name} failed: {message}"}
 
         # Unwrap Lambda response if it has the standard format
         if isinstance(result, dict) and "statusCode" in result and "body" in result:

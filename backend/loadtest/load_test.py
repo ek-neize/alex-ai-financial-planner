@@ -33,7 +33,17 @@ from pathlib import Path
 import boto3
 from dotenv import load_dotenv
 
-from stats import JobResult, Slo, TERMINAL, arrival_offsets, bedrock_cost, evaluate_slo, render_markdown, summarize
+from stats import (
+    TERMINAL,
+    JobResult,
+    Slo,
+    arrival_offsets,
+    bedrock_cost,
+    classify,
+    evaluate_slo,
+    render_markdown,
+    summarize,
+)
 
 load_dotenv(override=False)
 
@@ -171,23 +181,27 @@ def poll_jobs(db: Database, run_id: str, enqueued: dict[str, datetime], timeout:
     deadline = time.monotonic() + timeout
     while True:
         rows = db.query_raw(
-            """SELECT j.id, j.status, j.started_at, j.completed_at, j.error_message
+            """SELECT j.id, j.status, j.started_at, j.completed_at, j.error_message,
+                      j.report_payload IS NOT NULL AS has_report,
+                      j.charts_payload IS NOT NULL AS has_charts,
+                      j.retirement_payload IS NOT NULL AS has_retirement
                FROM jobs j WHERE j.clerk_user_id LIKE :prefix""",
             [{"name": "prefix", "value": {"stringValue": f"{USER_PREFIX}{run_id}_%"}}],
         )
-        results = [
-            JobResult(
+        results = []
+        for r in rows:
+            if r["id"] not in enqueued:
+                continue
+            status, missing = classify(r["status"], r["has_report"], r["has_charts"], r["has_retirement"])
+            results.append(JobResult(
                 job_id=r["id"],
-                status=r["status"],
+                status=status,
                 enqueued_at=enqueued[r["id"]],
                 started_at=parse_ts(r.get("started_at")),
                 completed_at=parse_ts(r.get("completed_at")),
-                error=r.get("error_message"),
-            )
-            for r in rows
-            if r["id"] in enqueued
-        ]
-        counts = {s: sum(r.status == s for r in results) for s in ["pending", "running", "completed", "failed"]}
+                error=r.get("error_message") or missing,
+            ))
+        counts = {s: sum(r.status == s for r in results) for s in ["pending", "running", "completed", "incomplete", "failed"]}
         print(f"   {datetime.now():%H:%M:%S}  " + "  ".join(f"{k}: {v}" for k, v in counts.items()), flush=True)
 
         if all(r.status in TERMINAL for r in results):

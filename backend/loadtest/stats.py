@@ -11,7 +11,7 @@ from datetime import datetime
 NOVA_PRO_INPUT_PER_1K = 0.0008
 NOVA_PRO_OUTPUT_PER_1K = 0.0032
 
-TERMINAL = {"completed", "failed"}
+TERMINAL = {"completed", "failed", "incomplete"}
 
 
 def arrival_offsets(jobs: int, rate_per_minute: float) -> list[float]:
@@ -213,3 +213,19 @@ def _n(value) -> str:
 
 def _ms(value) -> str:
     return "–" if value is None else f"{value / 1000:.1f}s"
+
+
+def classify(status: str, has_report: bool, has_charts: bool, has_retirement: bool) -> tuple[str, str | None]:
+    """A job only counts as completed if the user actually got all three results.
+
+    Load-test portfolios have >= 2 positions and retirement goals, so the planner's
+    rules require the reporter, charter and retirement agents. A job marked
+    'completed' with any of them missing is reported as 'incomplete'.
+    """
+    if status != "completed":
+        return status, None
+    missing = [name for name, ok in [("report", has_report), ("charts", has_charts),
+                                     ("retirement", has_retirement)] if not ok]
+    if missing:
+        return "incomplete", f"completed without: {', '.join(missing)}"
+    return "completed", None

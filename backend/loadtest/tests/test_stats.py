@@ -162,3 +162,28 @@ def test_report_contains_result_targets_and_metrics():
     assert "| planner | 2 | – | 0 | – | 81.0s | – |" in md
     assert "Bedrock throttles: 3" in md
     assert "`boom`" in md
+
+
+# --------------------------------------------------------------------------
+# classify: a "completed" job must actually contain its results
+# --------------------------------------------------------------------------
+
+from stats import classify  # noqa: E402
+
+
+def test_completed_job_with_all_results_is_completed():
+    assert classify("completed", True, True, True) == ("completed", None)
+
+
+def test_completed_job_missing_results_is_incomplete():
+    assert classify("completed", True, False, False) == ("incomplete", "completed without: charts, retirement")
+
+
+def test_other_statuses_pass_through():
+    assert classify("failed", False, False, False) == ("failed", None)
+    assert classify("running", False, False, False) == ("running", None)
+
+
+def test_incomplete_jobs_count_against_success_rate():
+    results = [job(), job("incomplete", error="completed without: report")]
+    assert summarize(results, 60)["success_rate"] == 0.5
