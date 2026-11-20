@@ -122,7 +122,7 @@ resource "aws_lambda_function" "researcher" {
   image_uri     = var.researcher_image_uri
   role          = aws_iam_role.researcher_lambda_role.arn
   timeout       = 300
-  memory_size   = 2048
+  memory_size   = 3008
   architectures = ["x86_64"]
 
   ephemeral_storage {
