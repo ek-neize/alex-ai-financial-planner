@@ -1,38 +1,83 @@
-# Alex - the Agentic Learning Equities Explainer
+# Alex: Multi-Agent AI Financial Planner on AWS
 
-## Multi-agent Enterprise-Grade SaaS Financial Planner
+**Alex** (Agentic Learning Equities eXplainer) is a SaaS app that analyses a user's investment portfolio. You sign in, enter your accounts and holdings, and a team of AI agents writes a portfolio report, draws allocation charts and projects your retirement outcomes. Everything runs serverless on AWS and is defined in Terraform.
 
-![Course Image](assets/alex.png)
+> **Origin:** Alex started as the capstone project of Ed Donner's *AI in Production* course. I deployed the full system to my own AWS account, debugged it end to end, and have kept extending it. My changes are listed in [What I added](#what-i-added) and are visible in the commit history.
 
-_If you're looking at this in Cursor, please right click on the filename in the Explorer on the left, and select "Open preview", to view it in formatted glory._
+<!-- TODO: add a demo video link and screenshots (app, Langfuse trace, CloudWatch dashboard) to assets/ -->
 
-### Welcome to The Capstone Project for Week 3 and Week 4!
+## Architecture
 
-#### The directories:
+```mermaid
+graph LR
+    User((User)) --> CF[CloudFront + S3<br/>Next.js frontend]
+    CF --> APIGW[API Gateway]
+    APIGW --> API[Lambda<br/>FastAPI backend]
+    API --> DB[(Aurora Serverless v2<br/>PostgreSQL, Data API)]
+    API --> SQS[SQS job queue]
+    SQS --> Planner[Planner<br/>orchestrator agent]
+    Planner --> Tagger[Tagger agent]
+    Planner --> Reporter[Reporter agent]
+    Planner --> Charter[Charter agent]
+    Planner --> Retirement[Retirement agent]
+    Reporter --> Vectors[(S3 Vectors<br/>research knowledge base)]
+    Tagger & Reporter & Charter & Retirement --> DB
+    Researcher[Researcher agent<br/>Lambda + Playwright MCP] --> Ingest[Ingest Lambda]
+    Ingest --> SM[SageMaker Serverless<br/>embeddings]
+    Ingest --> Vectors
+    Sched[EventBridge] --> Researcher
+```
 
-1. **guides** - this is where you will live - step by step guides to deploy to production
-2. **backend** - the agent code, organized into subdirectories, each a uv project (as is the backend parent directory)
-3. **frontend** - a NextJS React frontend integrated with Clerk
-4. **terraform** - separate terraform subdirectories with state for each part
-5. **scripts** - the final deployment script
+| Agent | Role |
+|---|---|
+| **Planner** | Orchestrator: reads the job from SQS, decides which specialists to call, and invokes them in parallel |
+| **Tagger** | Classifies instruments (ETFs, stocks) by asset class, region and sector |
+| **Reporter** | Writes the portfolio analysis using research retrieved from S3 Vectors, then scores its own output with an LLM-as-judge |
+| **Charter** | Produces chart data for the frontend visualisations |
+| **Retirement** | Runs retirement projections from the user's goals and holdings |
+| **Researcher** | Browses the web on a schedule and adds market research to the knowledge base |
 
-#### Order of play:
+## Tech stack
 
-##### Week 3
+- **AI:** OpenAI Agents SDK, AWS Bedrock (Amazon Nova Pro, GPT-OSS 120B) via LiteLLM, SageMaker Serverless embeddings (all-MiniLM-L6-v2), Playwright MCP
+- **Backend:** Python 3.12 with uv, FastAPI, AWS Lambda, SQS, Aurora Serverless v2 PostgreSQL (Data API), S3 Vectors
+- **Frontend:** Next.js (Pages Router), React, Clerk authentication, CloudFront
+- **Infrastructure:** Terraform (one independent stack per layer), Docker-built Lambda packages, ECR
+- **Operations:** Langfuse tracing, CloudWatch dashboards and alarms, LLM-as-judge evaluation
 
-- On Week 3 Day 3, we will do 1_permissions and 2_sagemaker
-- On Week 3 Day 4, we will do 3_ingest
-- On Week 3 Day 5, we will do 4_researcher
+## Design decisions
 
-##### Week 4
+- **S3 Vectors instead of OpenSearch** for the knowledge base: about 90% cheaper at this scale, with no cluster to run.
+- **Serverless everywhere** (Lambda, Aurora Serverless v2, SageMaker Serverless), so the system costs close to nothing when idle. The whole stack can be torn down and redeployed layer by layer.
+- **SQS between the API and the agents**, so a long multi-agent run never holds an HTTP request open, and failed jobs can be retried.
+- **Aurora Data API** instead of VPC networking, so Lambdas reach the database over HTTPS with IAM and Secrets Manager.
+- **One Terraform stack per layer** (`terraform/2_sagemaker` … `terraform/8_enterprise`), so each part can be deployed, debugged and destroyed independently.
+- **Each agent uses either structured outputs or tools, never both**, to work around a current LiteLLM/Bedrock limitation.
 
-- On Week 4 Day 1, we will do 5_database
-- On Week 4 Day 2, we will do 6_agents
-- On Week 4 Day 3, we will do 7_frontend
-- On Week 4 Day 4, we will do 8_enterprise
+## What I added
 
-#### Keep in mind
+- **Langfuse SDK upgraded from v3 to v4 in all five agents** ([commit](https://github.com/ek-neize/alex-ai-financial-planner/commit/9932b39)). I found and fixed two problems on the way:
+  - logfire 4.41 and later imports `TaskSpanData`, which doesn't exist in the openai-agents version in use, so I pinned logfire to 4.7.0.
+  - Langfuse v4 only exports LLM-shaped spans by default, which silently dropped the agent and tool spans. A custom `should_export_span` filter restores the full trace tree.
 
-- Please submit your community_contributions, including links to your repos, in the production repo community_contributions folder
-- Regularly do a git pull to get the latest code
-- Reach out in Udemy or email (ed@edwarddonner.com) if I can help! This is a gigantic project and I am here to help you deliver it!
+  Traces now arrive in near real time instead of after a ~15 minute delay.
+- **Fixed Lambda packaging on Linux** ([commit](https://github.com/ek-neize/alex-ai-financial-planner/commit/447d20e)): the Docker build left root-owned files that broke later runs.
+- **Made the Bedrock region consistent** across agents, Terraform and config, and resized the researcher Lambda so its headless browser runs reliably.
+- Diagnosed production issues across the stack: Bedrock region and model access, Terraform variables that were silently ignored, and missing database migrations after recreating Aurora.
+
+## Roadmap
+
+- [ ] Terraform remote state in S3 with locking
+- [ ] CI/CD with GitHub Actions: tests on every PR, automatic Lambda deploys on merge
+- [ ] Database migrations run automatically as part of deployment
+- [ ] Load testing for the agent pipeline
+
+## Running it yourself
+
+You need an AWS account with Bedrock model access, Docker, Terraform, uv, Node.js and a Clerk account. The step-by-step deployment guides are in [`guides/`](guides/), starting with [`1_permissions.md`](guides/1_permissions.md). Each `terraform/` directory has a `terraform.tfvars.example` to copy and fill in.
+
+**Cost:** while it's deployed, Aurora is the main cost. Run `terraform destroy` in each directory, from 8 down to 2, when you're not using it.
+
+## Credits
+
+Original course material and codebase by [Ed Donner](https://github.com/ed-donner/alex), MIT licensed. See [LICENSE](LICENSE).
