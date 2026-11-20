@@ -1,0 +1,22 @@
+[project]
+name = "loadtest"
+version = "0.1.0"
+description = "Load test for the Alex agent pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    "alex-database>=0.1.0",
+    "boto3>=1.44.7",
+    "python-dotenv>=1.2.4",
+]
+
+[tool.uv.sources]
+alex-database = { path = "../database", editable = true }
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
