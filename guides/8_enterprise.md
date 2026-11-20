@@ -434,7 +434,7 @@ Copy terraform.tfvars.example to terraform.tfvars and update the values, as usua
 
 Then:
 
-`terraform init`
+`terraform init -backend-config=../backend.hcl`
 
 `terraform apply`
 

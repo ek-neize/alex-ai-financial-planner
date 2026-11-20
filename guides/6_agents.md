@@ -345,7 +345,7 @@ Let's deploy all five Lambda functions and supporting infrastructure.
 **In directory**: `terraform/6_agents`
 
 ```bash
-terraform init
+terraform init -backend-config=../backend.hcl
 ```
 
 ### 6.2 Review the Plan

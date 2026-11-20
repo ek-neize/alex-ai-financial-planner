@@ -254,7 +254,7 @@ Navigate back to the terraform directory and deploy:
 # In alex/terraform/7_frontend directory
 
 # Initialize Terraform
-terraform init
+terraform init -backend-config=../backend.hcl
 
 # Review what will be created
 terraform plan

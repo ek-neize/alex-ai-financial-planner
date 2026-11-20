@@ -32,7 +32,25 @@ The beauty of this approach: no model preparation needed! SageMaker's HuggingFac
 
 Before starting:
 - Complete [1_permissions.md](1_permissions.md) 
-- Have Terraform installed (version 1.5+)
+- Have Terraform installed (version 1.10+, needed for S3-native state locking)
+
+## Step 0: Create the Terraform State Bucket (once per AWS account)
+
+Every stack stores its Terraform state in one S3 bucket. Create it once, before the first stack:
+
+```bash
+cd terraform/0_state_bucket
+terraform init
+terraform apply
+
+# Write the shared backend settings that every other stack uses
+terraform output -raw backend_config > ../backend.hcl
+cd ../..
+```
+
+This creates `alex-terraform-state-<your-account-id>`, a bucket with versioning, encryption, blocked public access and HTTPS-only access. It's protected with `prevent_destroy`, and its own small state file stays local in `terraform/0_state_bucket` (gitignored). `terraform/backend.hcl` is gitignored too.
+
+Every stack is then initialised with `terraform init -backend-config=../backend.hcl`.
 
 ## Step 1: Configure Terraform Variables
 
@@ -56,8 +74,8 @@ aws_region = "us-east-1"  # Use your DEFAULT_AWS_REGION from .env
 Now let's deploy the SageMaker infrastructure. With the HuggingFace approach, there's no need to prepare model artifacts - the model will be downloaded automatically from HuggingFace Hub!
 
 ```bash
-# Initialize Terraform (creates local state file)
-terraform init
+# Initialize Terraform (state is stored in the S3 state bucket)
+terraform init -backend-config=../backend.hcl
 
 # Deploy the SageMaker infrastructure
 terraform apply

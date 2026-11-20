@@ -53,9 +53,9 @@ This first guide focuses on setting up the necessary AWS permissions. We'll crea
 
 This project uses Terraform for infrastructure deployment with a specific approach designed for educational purposes:
 - **Separate Terraform directories**: Each guide has its own Terraform directory (e.g., `terraform/2_sagemaker`, `terraform/3_ingestion`)
-- **Local state files**: We use local state files instead of remote S3 state for simplicity (automatically gitignored)
+- **Remote state in S3**: State for every stack is stored in one versioned, encrypted S3 bucket with S3-native locking, so it survives a lost laptop and can be shared with CI (see `terraform/0_state_bucket`)
 - **Independent deployments**: Each part can be deployed independently without affecting other parts
-- **No state bucket needed**: This eliminates the complexity of setting up and managing a Terraform state bucket
+- **One-time bootstrap**: The state bucket is created once by `terraform/0_state_bucket` (the only stack with local state) before any other stack
 
 This approach allows you to:
 - Deploy each part as you progress through the guides

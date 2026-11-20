@@ -1,0 +1,12 @@
+# Shared S3 backend settings for stacks 2_sagemaker ... 8_enterprise.
+#
+# 1. Deploy terraform/0_state_bucket once.
+# 2. Copy this file to terraform/backend.hcl (gitignored), or write the output there:
+#      terraform -chdir=terraform/0_state_bucket output -raw backend_config > terraform/backend.hcl
+# 3. In each stack directory, initialise with:
+#      terraform init -backend-config=../backend.hcl
+#
+# Each stack sets its own state key, plus use_lockfile and encrypt, in its main.tf.
+
+bucket = "alex-terraform-state-123456789012"
+region = "us-east-1"

@@ -1,12 +1,20 @@
 # Part 8: Enterprise - CloudWatch Dashboards for Monitoring
 
 terraform {
-  required_version = ">= 1.0"
+  required_version = ">= 1.10"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+  }
+
+  # Remote state in S3 (bucket and region come from ../backend.hcl):
+  #   terraform init -backend-config=../backend.hcl
+  backend "s3" {
+    key          = "8_enterprise/terraform.tfstate"
+    use_lockfile = true # S3-native state locking (Terraform >= 1.10)
+    encrypt      = true
   }
 }
 

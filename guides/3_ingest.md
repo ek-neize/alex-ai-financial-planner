@@ -80,8 +80,8 @@ sagemaker_endpoint_name = "alex-embedding-endpoint"  # From Part 2
 Now deploy the infrastructure:
 
 ```bash
-# Initialize Terraform (creates local state file)
-terraform init
+# Initialize Terraform (state is stored in the S3 state bucket)
+terraform init -backend-config=../backend.hcl
 
 # Deploy the infrastructure
 terraform apply

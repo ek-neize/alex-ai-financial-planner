@@ -227,8 +227,8 @@ max_capacity = 1.0        # Maximum ACUs (keep low for dev)
 Deploy the database:
 
 ```bash
-# Initialize Terraform (creates local state file)
-terraform init
+# Initialize Terraform (state is stored in the S3 state bucket)
+terraform init -backend-config=../backend.hcl
 
 # Deploy the database infrastructure
 terraform apply

@@ -240,3 +240,6 @@ backend/**/*_lambda.zip
 CLAUDE.md
 AGENTS.md
 gameplan.md
+
+# Terraform S3 backend config (contains the account-specific bucket name)
+terraform/backend.hcl

@@ -1,12 +1,20 @@
 # Part 7: Frontend & API Infrastructure
 
 terraform {
-  required_version = ">= 1.0"
+  required_version = ">= 1.10"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+  }
+
+  # Remote state in S3 (bucket and region come from ../backend.hcl):
+  #   terraform init -backend-config=../backend.hcl
+  backend "s3" {
+    key          = "7_frontend/terraform.tfstate"
+    use_lockfile = true # S3-native state locking (Terraform >= 1.10)
+    encrypt      = true
   }
 }
 
@@ -19,19 +27,28 @@ data "aws_caller_identity" "current" {}
 
 data "aws_region" "current" {}
 
+# State bucket created by terraform/0_state_bucket
+locals {
+  state_bucket = "alex-terraform-state-${data.aws_caller_identity.current.account_id}"
+}
+
 # Reference Part 5 Database resources
 data "terraform_remote_state" "database" {
-  backend = "local"
+  backend = "s3"
   config = {
-    path = "../5_database/terraform.tfstate"
+    bucket = local.state_bucket
+    key    = "5_database/terraform.tfstate"
+    region = data.aws_region.current.name
   }
 }
 
 # Reference Part 6 Agents resources
 data "terraform_remote_state" "agents" {
-  backend = "local"
+  backend = "s3"
   config = {
-    path = "../6_agents/terraform.tfstate"
+    bucket = local.state_bucket
+    key    = "6_agents/terraform.tfstate"
+    region = data.aws_region.current.name
   }
 }
 

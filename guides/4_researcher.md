@@ -146,8 +146,8 @@ Deploy the ECR repository and IAM roles first.
 Mac/Linux:
 
 ```bash
-# Initialize Terraform (creates local state file)
-terraform init
+# Initialize Terraform (state is stored in the S3 state bucket)
+terraform init -backend-config=../backend.hcl
 
 # Deploy only the ECR repository and IAM roles (not App Runner yet)
 terraform apply -target=aws_ecr_repository.researcher -target=aws_iam_role.app_runner_role
@@ -156,8 +156,8 @@ terraform apply -target=aws_ecr_repository.researcher -target=aws_iam_role.app_r
 PC:
 
 ```powershell
-# Initialize Terraform (creates local state file)
-terraform init
+# Initialize Terraform (state is stored in the S3 state bucket)
+terraform init -backend-config=../backend.hcl
 
 # Deploy only the ECR repository and IAM roles (not App Runner yet)
 terraform apply -target="aws_ecr_repository.researcher" -target="aws_iam_role.app_runner_role"

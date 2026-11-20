@@ -181,10 +181,16 @@ def deploy_terraform():
         print(f"  ❌ Terraform directory not found: {terraform_dir}")
         sys.exit(1)
 
-    # Initialize Terraform if needed
+    # Initialize Terraform if needed (state lives in S3; see terraform/backend.hcl.example)
     if not (terraform_dir / ".terraform").exists():
+        backend_config = terraform_dir.parent / "backend.hcl"
+        if not backend_config.exists():
+            print(f"  ❌ {backend_config} not found.")
+            print("     Deploy terraform/0_state_bucket and create backend.hcl first")
+            print("     (see terraform/backend.hcl.example).")
+            sys.exit(1)
         print("  Initializing Terraform...")
-        run_command(["terraform", "init"], cwd=terraform_dir)
+        run_command(["terraform", "init", "-backend-config=../backend.hcl"], cwd=terraform_dir)
 
     # Plan the deployment
     print("  Planning deployment...")
