@@ -1,14 +1,16 @@
 # Part 1: GitHub Actions deploy role
 #
-# An IAM role that GitHub Actions assumes through OIDC to deploy the agent
-# Lambdas' code. No long-lived AWS keys are stored in GitHub.
+# An IAM role that GitHub Actions assumes through OIDC to deploy application
+# code: the agent Lambdas, the API Lambda, the researcher container and the
+# frontend. It also runs database migrations. No long-lived AWS keys are
+# stored in GitHub.
 #
-# Least privilege: the role can only upload the agent zips and update the code
-# of the five agent functions. Infrastructure changes stay a manual,
-# reviewed `terraform apply`.
+# Least privilege: the role can update code and upload static files for Alex's
+# own resources only. It can't create, delete or reconfigure infrastructure;
+# that stays a manual, reviewed `terraform apply`.
 #
 # The role costs nothing, so leave this stack deployed when you tear the rest
-# down; the deploy job skips itself when the Lambdas don't exist.
+# down; each deploy job skips itself when its target isn't deployed.
 
 terraform {
   required_version = ">= 1.10"
@@ -169,6 +171,93 @@ resource "aws_iam_role_policy" "run_migrations" {
         Effect   = "Allow"
         Action   = ["secretsmanager:ListSecrets"]
         Resource = "*"
+      },
+    ]
+  })
+}
+
+# Deploy the API Lambda (terraform/7_frontend), the researcher container image
+# (terraform/4_researcher) and the static frontend (S3 + CloudFront, 7_frontend).
+# Names must match those stacks.
+resource "aws_iam_role_policy" "deploy_api_researcher_frontend" {
+  name = "deploy-api-researcher-frontend"
+  role = aws_iam_role.github_deploy.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "UpdateApiAndResearcherCode"
+        Effect = "Allow"
+        Action = [
+          "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:UpdateFunctionCode",
+        ]
+        Resource = [
+          "arn:aws:lambda:${var.aws_region}:${local.account_id}:function:alex-api",
+          "arn:aws:lambda:${var.aws_region}:${local.account_id}:function:alex-researcher",
+        ]
+      },
+      {
+        # Account-wide by design: an ECR login token isn't tied to a repository
+        Sid      = "EcrLogin"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Sid    = "PushResearcherImage"
+        Effect = "Allow"
+        Action = [
+          "ecr:DescribeRepositories",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:PutImage",
+          # UpdateFunctionCode checks the image with the caller's permissions
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:GetRepositoryPolicy",
+        ]
+        Resource = "arn:aws:ecr:${var.aws_region}:${local.account_id}:repository/alex-researcher"
+      },
+      {
+        Sid      = "FindApiUrl"
+        Effect   = "Allow"
+        Action   = ["apigateway:GET"]
+        Resource = "arn:aws:apigateway:${var.aws_region}::/apis"
+      },
+      {
+        Sid      = "ListFrontendBucket"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = "arn:aws:s3:::alex-frontend-${local.account_id}"
+      },
+      {
+        Sid      = "UploadFrontend"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:DeleteObject"]
+        Resource = "arn:aws:s3:::alex-frontend-${local.account_id}/*"
+      },
+      {
+        # ListDistributions has no resource-level permissions
+        Sid      = "FindDistribution"
+        Effect   = "Allow"
+        Action   = ["cloudfront:ListDistributions"]
+        Resource = "*"
+      },
+      {
+        # The distribution ID changes on every redeploy, so match on the tag
+        # 7_frontend sets rather than an ID; other projects' distributions are untouched
+        Sid      = "InvalidateFrontendCache"
+        Effect   = "Allow"
+        Action   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
+        Resource = "arn:aws:cloudfront::${local.account_id}:distribution/*"
+        Condition = {
+          StringEquals = { "aws:ResourceTag/Project" = "alex" }
+        }
       },
     ]
   })

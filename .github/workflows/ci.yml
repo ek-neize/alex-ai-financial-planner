@@ -75,16 +75,19 @@ jobs:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
 
   # ---------------------------------------------------------------------------
-  # Continuous deployment of the agent Lambdas' code
+  # Continuous deployment of application code (infrastructure stays manual Terraform)
   # ---------------------------------------------------------------------------
 
   changes:
-    name: Detect changed agents
+    name: Detect what changed
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       agents: ${{ steps.agents.outputs.agents }}
       migrations: ${{ steps.agents.outputs.migrations }}
+      api: ${{ steps.agents.outputs.api }}
+      researcher: ${{ steps.agents.outputs.researcher }}
+      frontend: ${{ steps.agents.outputs.frontend }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v4
@@ -98,23 +101,32 @@ jobs:
             charter: [backend/charter/**, backend/database/**]
             retirement: [backend/retirement/**, backend/database/**]
       - uses: dorny/paths-filter@v4
-        id: migrations
+        id: other
         with:
           filters: |
             migrations: [backend/database/migrations/**, backend/database/run_migrations.py]
+            api: [backend/api/**, backend/database/src/**]
+            researcher: [backend/researcher/**]
+            frontend: [frontend/**]
       - id: agents
         env:
           CHANGED: ${{ steps.filter.outputs.changes }}
-          MIGRATIONS: ${{ steps.migrations.outputs.migrations }}
+          MIGRATIONS: ${{ steps.other.outputs.migrations }}
+          API: ${{ steps.other.outputs.api }}
+          RESEARCHER: ${{ steps.other.outputs.researcher }}
+          FRONTEND: ${{ steps.other.outputs.frontend }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             CHANGED='["planner","tagger","reporter","charter","retirement"]'
-            MIGRATIONS=true
+            MIGRATIONS=true API=true RESEARCHER=true FRONTEND=true
           fi
-          echo "agents=$CHANGED" >> "$GITHUB_OUTPUT"
-          echo "migrations=$MIGRATIONS" >> "$GITHUB_OUTPUT"
-          echo "Agents to deploy: $CHANGED"
-          echo "Run migrations: $MIGRATIONS"
+          {
+            echo "agents=$CHANGED"
+            echo "migrations=$MIGRATIONS"
+            echo "api=$API"
+            echo "researcher=$RESEARCHER"
+            echo "frontend=$FRONTEND"
+          } | tee -a "$GITHUB_OUTPUT"
 
   migrate:
     name: Database migrations
@@ -239,3 +251,214 @@ jobs:
             --output table
           aws lambda wait function-updated-v2 --function-name "$FUNCTION"
           echo "::notice title=Deployed::$FUNCTION updated to ${GITHUB_SHA::7}"
+
+  deploy-api:
+    name: Deploy API
+    # After migrations, like the agents: new API code never runs against an old schema
+    needs: [changes, migrate, backend-tests, terraform, frontend]
+    if: ${{ !cancelled() && !failure() && needs.changes.outputs.api == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: deploy-api
+      cancel-in-progress: false
+    env:
+      FUNCTION: alex-api
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Check the function is deployed
+        id: check
+        run: |
+          if ERR=$(aws lambda get-function --function-name "$FUNCTION" 2>&1 > /dev/null); then
+            echo "deployed=true" >> "$GITHUB_OUTPUT"
+          elif grep -q ResourceNotFoundException <<< "$ERR"; then
+            echo "deployed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy skipped::$FUNCTION is not deployed (stack torn down), nothing to update."
+          else
+            echo "::error title=Cannot check $FUNCTION::$ERR"
+            exit 1
+          fi
+
+      - uses: astral-sh/setup-uv@v7
+        if: steps.check.outputs.deployed == 'true'
+
+      - name: Package with Docker (Lambda Python 3.12 image)
+        if: steps.check.outputs.deployed == 'true'
+        working-directory: backend/api
+        run: uv run package_docker.py
+
+      # ~25 MB, under Lambda's 50 MB direct-upload limit, so no S3 staging needed
+      - name: Update function code
+        if: steps.check.outputs.deployed == 'true'
+        run: |
+          aws lambda update-function-code \
+            --function-name "$FUNCTION" \
+            --zip-file fileb://backend/api/api_lambda.zip \
+            --query '{CodeSha256: CodeSha256, LastModified: LastModified}' \
+            --output table
+          aws lambda wait function-updated-v2 --function-name "$FUNCTION"
+          echo "::notice title=Deployed::$FUNCTION updated to ${GITHUB_SHA::7}"
+
+  deploy-researcher:
+    name: Deploy researcher
+    needs: [changes, backend-tests, terraform, frontend]
+    if: ${{ !cancelled() && !failure() && needs.changes.outputs.researcher == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: deploy-researcher
+      cancel-in-progress: false
+    env:
+      FUNCTION: alex-researcher
+      REPOSITORY: alex-researcher
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Check the function is deployed
+        id: check
+        run: |
+          if ERR=$(aws lambda get-function --function-name "$FUNCTION" 2>&1 > /dev/null); then
+            echo "deployed=true" >> "$GITHUB_OUTPUT"
+          elif grep -q ResourceNotFoundException <<< "$ERR"; then
+            echo "deployed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy skipped::$FUNCTION is not deployed (stack torn down), nothing to update."
+          else
+            echo "::error title=Cannot check $FUNCTION::$ERR"
+            exit 1
+          fi
+
+      - name: Build and push the image
+        id: image
+        if: steps.check.outputs.deployed == 'true'
+        working-directory: backend/researcher
+        run: |
+          REGISTRY=$(aws ecr describe-repositories --repository-names "$REPOSITORY" \
+            --query 'repositories[0].repositoryUri' --output text | cut -d/ -f1)
+          IMAGE="$REGISTRY/$REPOSITORY:sha-${GITHUB_SHA::12}"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+          # --provenance=false: Lambda rejects the multi-manifest index that
+          # BuildKit's default provenance attestation produces
+          docker buildx build --platform linux/amd64 --provenance=false -t "$IMAGE" --push .
+          echo "uri=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Point the function at the new image
+        if: steps.check.outputs.deployed == 'true'
+        env:
+          IMAGE: ${{ steps.image.outputs.uri }}
+        run: |
+          aws lambda update-function-code --function-name "$FUNCTION" --image-uri "$IMAGE" \
+            --query '{ImageUri: ImageUri, LastModified: LastModified}' --output table
+          aws lambda wait function-updated-v2 --function-name "$FUNCTION"
+          echo "::notice title=Deployed::$FUNCTION updated to ${GITHUB_SHA::7}"
+
+  deploy-frontend:
+    name: Deploy frontend
+    # After the API, so the new UI never calls endpoints that aren't live yet
+    needs: [changes, deploy-api, backend-tests, terraform, frontend]
+    if: ${{ !cancelled() && !failure() && needs.changes.outputs.frontend == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: deploy-frontend
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # Everything is looked up by name, so nothing goes stale when 7_frontend is
+      # torn down and recreated (new API URL, new distribution ID)
+      - name: Find the bucket, API URL and distribution
+        id: find
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          BUCKET="alex-frontend-${ACCOUNT_ID}"
+          if ! ERR=$(aws s3api head-bucket --bucket "$BUCKET" 2>&1); then
+            if grep -qE "404|Not Found" <<< "$ERR"; then
+              echo "deployed=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Deploy skipped::The frontend bucket doesn't exist (stack torn down), nothing to update."
+              exit 0
+            fi
+            echo "::error title=Cannot check the frontend bucket::$ERR"
+            exit 1
+          fi
+          API_URL=$(aws apigatewayv2 get-apis \
+            --query "Items[?Name=='alex-api-gateway'].ApiEndpoint | [0]" --output text)
+          DIST_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?Origins.Items[?starts_with(DomainName, '${BUCKET}.')]].Id | [0]" \
+            --output text)
+          for value in "$API_URL" "$DIST_ID"; do
+            if [ -z "$value" ] || [ "$value" = "None" ]; then
+              echo "::error title=Frontend stack incomplete::API URL '$API_URL', distribution '$DIST_ID'"
+              exit 1
+            fi
+          done
+          if [ -z "$CLERK_KEY" ]; then
+            echo "::error title=Missing variable::Set CLERK_PUBLISHABLE_KEY on the production environment"
+            exit 1
+          fi
+          { echo "deployed=true"; echo "bucket=$BUCKET"; echo "api_url=$API_URL"; echo "dist_id=$DIST_ID"; } >> "$GITHUB_OUTPUT"
+        env:
+          CLERK_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+
+      - uses: actions/setup-node@v5
+        if: steps.find.outputs.deployed == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build static export
+        if: steps.find.outputs.deployed == 'true'
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: ${{ steps.find.outputs.api_url }}
+          # Publishable keys are public (they ship in the page); the secret key isn't needed for a static export
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL: /dashboard
+          NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL: /dashboard
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload and invalidate the CDN cache
+        if: steps.find.outputs.deployed == 'true'
+        working-directory: frontend
+        env:
+          BUCKET: ${{ steps.find.outputs.bucket }}
+          DIST_ID: ${{ steps.find.outputs.dist_id }}
+        run: |
+          # Content-hashed assets first, cached for a year; then everything else
+          # (HTML and RSC payloads keep their names between builds) revalidated
+          # on every request; then remove files the new build no longer has
+          aws s3 sync out/_next/static "s3://$BUCKET/_next/static" \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 sync out/ "s3://$BUCKET/" --exclude "_next/static/*" --cache-control "no-cache"
+          aws s3 sync out/ "s3://$BUCKET/" --delete --size-only
+          INVALIDATION=$(aws cloudfront create-invalidation --distribution-id "$DIST_ID" \
+            --paths "/*" --query Invalidation.Id --output text)
+          aws cloudfront wait invalidation-completed --distribution-id "$DIST_ID" --id "$INVALIDATION"
+          echo "::notice title=Deployed::Frontend updated to ${GITHUB_SHA::7}"
