@@ -1,5 +1,7 @@
 # Alex: Multi-Agent AI Financial Planner on AWS
 
+[![CI](https://github.com/ek-neize/alex-ai-financial-planner/actions/workflows/ci.yml/badge.svg)](https://github.com/ek-neize/alex-ai-financial-planner/actions/workflows/ci.yml)
+
 **Alex** (Agentic Learning Equities eXplainer) is a SaaS app that analyses a user's investment portfolio. You sign in, enter your accounts and holdings, and a team of AI agents writes a portfolio report, draws allocation charts and projects your retirement outcomes. Everything runs serverless on AWS and is defined in Terraform.
 
 > **Origin:** Alex started as the capstone project of Ed Donner's *AI in Production* course. I deployed the full system to my own AWS account, debugged it end to end, and have kept extending it. My changes are listed in [What I added](#what-i-added) and are visible in the commit history.
@@ -63,12 +65,14 @@ graph LR
   Traces now arrive in near real time instead of after a ~15 minute delay.
 - **Fixed Lambda packaging on Linux** ([commit](https://github.com/ek-neize/alex-ai-financial-planner/commit/447d20e)): the Docker build left root-owned files that broke later runs.
 - **Made the Bedrock region consistent** across agents, Terraform and config, and resized the researcher Lambda so its headless browser runs reliably.
+- **Added unit tests and a CI pipeline** ([workflow](.github/workflows/ci.yml)). The tests cover the parts of the system that don't depend on the LLM: the retirement Monte Carlo simulation and projections, the portfolio metrics and allocation maths, the tagger's structured-output validation, and the shared database schemas. GitHub Actions runs them on every push and pull request. It also checks formatting and validates all 7 Terraform stacks, and lints and builds the frontend.
 - Diagnosed production issues across the stack: Bedrock region and model access, Terraform variables that were silently ignored, and missing database migrations after recreating Aurora.
 
 ## Roadmap
 
+- [x] CI with GitHub Actions: unit tests, Terraform validation and a frontend build on every push and PR
 - [ ] Terraform remote state in S3 with locking
-- [ ] CI/CD with GitHub Actions: tests on every PR, automatic Lambda deploys on merge
+- [ ] Continuous deployment: Lambdas deploy automatically on merge (needs remote state first)
 - [ ] Database migrations run automatically as part of deployment
 - [ ] Load testing for the agent pipeline
 
