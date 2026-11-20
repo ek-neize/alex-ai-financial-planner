@@ -16,7 +16,9 @@ import logging
 try:
     from dotenv import load_dotenv
 
-    load_dotenv(override=True)
+    # Never override real environment variables (e.g. ARNs passed in by Terraform
+    # or CI) with possibly stale values from .env
+    load_dotenv(override=False)
 except ImportError:
     pass  # dotenv not installed, continue without it
 
