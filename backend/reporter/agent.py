@@ -8,10 +8,20 @@ import logging
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
+from botocore.config import Config
+
 from agents import function_tool, RunContextWrapper
 from agents.extensions.models.litellm_model import LitellmModel
 
 logger = logging.getLogger()
+
+# The embedding endpoint is SageMaker Serverless with a small concurrency limit
+# (terraform/2_sagemaker max_concurrency). Under load, concurrent reporters get
+# ThrottlingException. boto3's default (legacy) retries back off for well under a
+# second, so a throttled report silently lost its market research (1 of 25 in
+# the load test). Standard mode uses exponential backoff with jitter, which
+# spreads competing retries out: up to ~30s here, within the 300s budget.
+SAGEMAKER_CONFIG = Config(retries={"mode": "standard", "total_max_attempts": 6})
 
 
 @dataclass
@@ -135,7 +145,9 @@ async def get_market_insights(
 
         # Get embeddings
         sagemaker_region = os.getenv("DEFAULT_AWS_REGION", "us-east-1")
-        sagemaker = boto3.client("sagemaker-runtime", region_name=sagemaker_region)
+        sagemaker = boto3.client(
+            "sagemaker-runtime", region_name=sagemaker_region, config=SAGEMAKER_CONFIG
+        )
         endpoint_name = os.getenv("SAGEMAKER_ENDPOINT", "alex-embedding-endpoint")
         query = f"market analysis {' '.join(symbols[:5])}" if symbols else "market outlook"
 

@@ -4,3 +4,9 @@
 # Your AWS region for SageMaker
 # Should match your DEFAULT_AWS_REGION from .env
 aws_region = "us-east-1"
+
+# Concurrent requests for the embedding endpoint (default 2). Uses part of the
+# account-wide serverless concurrency quota (10 by default); check it with:
+#   aws service-quotas list-service-quotas --service-code sagemaker \
+#     --query "Quotas[?contains(QuotaName,'total concurrency')].[QuotaName,Value]"
+# max_concurrency = 5

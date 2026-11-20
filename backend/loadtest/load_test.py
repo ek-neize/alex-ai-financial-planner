@@ -272,6 +272,26 @@ def collect_metrics(start: datetime, end: datetime, model_id: str | None) -> dic
         else:
             metrics[name] = value
 
+    # Degradations that don't fail a job, e.g. the reporter writing its report without
+    # market research because the embedding endpoint throttled it
+    logs = boto3.client("logs", region_name=REGION)
+    try:
+        count, token = 0, None
+        while True:
+            kwargs = {"logGroupName": "/aws/lambda/alex-reporter", "filterPattern": '"Could not retrieve market insights"',
+                      "startTime": int(start.replace(tzinfo=timezone.utc).timestamp() * 1000),
+                      "endTime": int(end.replace(tzinfo=timezone.utc).timestamp() * 1000)}
+            if token:
+                kwargs["nextToken"] = token
+            page = logs.filter_log_events(**kwargs)
+            count += len(page.get("events", []))
+            token = page.get("nextToken")
+            if not token:
+                break
+        metrics["Reports without market insights"] = count
+    except Exception as e:
+        print(f"   ⚠️  Couldn't count market insight failures: {e}")
+
     if bedrock:
         metrics["Bedrock invocations"] = bedrock.get("Invocations", 0)
         metrics["Bedrock throttles"] = bedrock.get("InvocationThrottles", 0)

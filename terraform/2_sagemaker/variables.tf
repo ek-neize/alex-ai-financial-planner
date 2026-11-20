@@ -14,3 +14,18 @@ variable "embedding_model_name" {
   type        = string
   default     = "sentence-transformers/all-MiniLM-L6-v2"
 }
+variable "max_concurrency" {
+  description = <<-EOT
+    Max concurrent requests for the serverless embedding endpoint. Counts against the
+    account quota "Maximum total concurrency that can be allocated across all serverless
+    endpoints" (10 by default), shared with any other serverless endpoints. Under load,
+    requests beyond this are throttled; the reporter retries with backoff.
+  EOT
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.max_concurrency >= 1 && var.max_concurrency <= 200
+    error_message = "max_concurrency must be between 1 and 200."
+  }
+}
