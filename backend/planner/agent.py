@@ -2,6 +2,7 @@
 Financial Planner Orchestrator Agent - coordinates portfolio analysis across specialized agents.
 """
 
+import asyncio
 import os
 import json
 import boto3
@@ -54,7 +55,11 @@ async def invoke_lambda_agent(
     try:
         logger.info(f"Invoking {agent_name} Lambda: {function_name}")
 
-        response = lambda_client.invoke(
+        # boto3 is blocking. Run it in a worker thread so the event loop stays free
+        # and the sub-agents the model calls in one turn actually run in parallel
+        # (a direct call here ran them one after another: total = sum of all three)
+        response = await asyncio.to_thread(
+            lambda_client.invoke,
             FunctionName=function_name,
             InvocationType="RequestResponse",
             Payload=json.dumps(payload),
