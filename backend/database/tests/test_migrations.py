@@ -202,3 +202,27 @@ def test_retries_while_database_resumes(monkeypatch):
     monkeypatch.setattr("run_migrations.time.sleep", lambda _: None)
     fake = FakeDataApi(resuming_calls=2)
     assert migrate(make_db(fake), MIGRATIONS) == 2
+
+
+def test_retries_while_new_cluster_is_not_visible_to_data_api(monkeypatch):
+    # Seen live: right after creation, the Data API says "Cannot find DBInstance in DBCluster"
+    monkeypatch.setattr("run_migrations.time.sleep", lambda _: None)
+    fake = FakeDataApi()
+    calls = {"n": 0}
+    original = fake.execute_statement
+
+    def not_ready_twice(**kwargs):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise FakeClientError("DatabaseNotFoundException")
+        return original(**kwargs)
+
+    fake.execute_statement = not_ready_twice
+    assert migrate(make_db(fake), MIGRATIONS) == 2
+
+
+def test_gives_up_after_bounded_retries(monkeypatch):
+    monkeypatch.setattr("run_migrations.time.sleep", lambda _: None)
+    fake = FakeDataApi(resuming_calls=100)
+    with pytest.raises(FakeClientError):
+        migrate(make_db(fake), MIGRATIONS)

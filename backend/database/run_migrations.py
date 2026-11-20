@@ -148,8 +148,10 @@ def pending_migrations(migrations: list[Migration], applied: dict[str, str]) -> 
 class DataApi:
     """Thin wrapper over the RDS Data API client."""
 
-    # Aurora can briefly reject calls while the cluster starts up or resumes
-    RETRYABLE = ("DatabaseResumingException", "ServiceUnavailableError")
+    # Aurora can briefly reject calls while it resumes, or right after Terraform
+    # creates it ("Cannot find DBInstance in DBCluster" until the Data API sees
+    # the new instance). Retries are capped (~2.5 min), so a wrong ARN still fails.
+    RETRYABLE = ("DatabaseResumingException", "DatabaseNotFoundException", "ServiceUnavailableError")
 
     def __init__(self, client, cluster_arn: str, secret_arn: str, database: str):
         self.client = client
