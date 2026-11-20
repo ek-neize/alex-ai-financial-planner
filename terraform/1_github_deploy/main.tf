@@ -42,6 +42,9 @@ locals {
   # Must match terraform/6_agents
   lambda_packages_bucket = "alex-lambda-packages-${local.account_id}"
 
+  # Repos using GitHub's immutable subject format send "repo:owner@id/name@id"
+  github_subject_prefix = coalesce(var.github_subject_prefix, "repo:${var.github_repository}")
+
   github_oidc_url = "token.actions.githubusercontent.com"
   github_oidc_provider_arn = (
     var.create_oidc_provider
@@ -77,7 +80,7 @@ resource "aws_iam_role" "github_deploy" {
         StringEquals = {
           "${local.github_oidc_url}:aud" = "sts.amazonaws.com"
           # Only jobs in this repo's deployment environment, not forks or other branches' PR jobs
-          "${local.github_oidc_url}:sub" = "repo:${var.github_repository}:environment:${var.github_environment}"
+          "${local.github_oidc_url}:sub" = "${local.github_subject_prefix}:environment:${var.github_environment}"
         }
       }
     }]

@@ -4,3 +4,7 @@ github_repository = "your-github-username/your-repo-name"
 # Leave false if your account already has a token.actions.githubusercontent.com
 # OIDC provider (IAM > Identity providers); only one is allowed per account.
 create_oidc_provider = false
+
+# If your repo uses GitHub's immutable OIDC subject format, set the prefix it sends:
+#   gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix
+# github_subject_prefix = "repo:your-github-username@12345678/your-repo-name@987654321"

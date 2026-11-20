@@ -27,7 +27,7 @@ jobs:
       run:
         working-directory: backend/${{ matrix.project }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -40,7 +40,7 @@ jobs:
     name: Terraform fmt & validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: hashicorp/setup-terraform@v3
       - name: Check formatting
         run: terraform fmt -check -recursive -diff terraform
@@ -60,7 +60,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -85,7 +85,7 @@ jobs:
     outputs:
       agents: ${{ steps.agents.outputs.agents }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -125,9 +125,9 @@ jobs:
     env:
       FUNCTION: alex-${{ matrix.agent }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -136,11 +136,15 @@ jobs:
       - name: Check the function is deployed
         id: check
         run: |
-          if aws lambda get-function --function-name "$FUNCTION" > /dev/null 2>&1; then
+          if ERR=$(aws lambda get-function --function-name "$FUNCTION" 2>&1 > /dev/null); then
             echo "deployed=true" >> "$GITHUB_OUTPUT"
-          else
+          elif grep -q ResourceNotFoundException <<< "$ERR"; then
             echo "deployed=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Deploy skipped::$FUNCTION is not deployed (stack torn down), nothing to update."
+          else
+            # Anything else (e.g. AccessDenied) is a real problem; don't silently skip deploys
+            echo "::error title=Cannot check $FUNCTION::$ERR"
+            exit 1
           fi
 
       - uses: astral-sh/setup-uv@v6

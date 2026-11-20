@@ -20,3 +20,14 @@ variable "create_oidc_provider" {
   type        = bool
   default     = false
 }
+
+variable "github_subject_prefix" {
+  description = <<-EOT
+    The repo part of the OIDC token's sub claim. Leave null for the classic
+    format ("repo:owner/name"). Repos that use GitHub's immutable subject
+    format send "repo:owner@<owner-id>/name@<repo-id>"; get the exact value with:
+      gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix
+  EOT
+  type        = string
+  default     = null
+}
