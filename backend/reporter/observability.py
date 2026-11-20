@@ -52,7 +52,8 @@ def observe():
         logger.info("🔍 Observability: Setting up LangFuse...")
 
         import logfire
-        from langfuse import get_client
+        from langfuse import Langfuse, get_client
+        from langfuse.span_filter import is_default_export_span
 
         # Configure logfire to instrument OpenAI Agents SDK
         logfire.configure(
@@ -65,7 +66,16 @@ def observe():
         logfire.instrument_openai_agents()
         logger.info("✅ Observability: OpenAI Agents SDK instrumented")
 
-        # Initialize LangFuse client
+        # Initialize LangFuse client.
+        # Langfuse SDK v4+ only exports LLM-looking spans by default, which would drop
+        # logfire's "Agent run" / "Function" spans and break the trace tree - so keep them.
+        Langfuse(
+            should_export_span=lambda span: is_default_export_span(span)
+            or (
+                span.instrumentation_scope is not None
+                and span.instrumentation_scope.name.startswith("logfire")
+            )
+        )
         langfuse_client = get_client()
         logger.info("✅ Observability: LangFuse client initialized")
 
