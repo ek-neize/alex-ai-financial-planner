@@ -7,47 +7,28 @@ import os
 import logging
 from contextlib import contextmanager
 
-# Use root logger for Lambda compatibility
 logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+
+SERVICE_NAME = "alex_reporter_agent"
+
+# Set up once per Lambda container and reused by warm invocations.
+#
+# Earlier versions configured logfire, instrumented the Agents SDK and created a
+# Langfuse client on every invocation, then called shutdown() at the end. The
+# next warm invocation in the same container then hung until the Lambda timed
+# out (reproduced: a second invoke of a warm reporter always hit the 300s
+# limit). Shutdown is final, so only flush() per invocation.
+_langfuse_client = None
+_setup_attempted = False
 
 
-@contextmanager
-def observe():
-    """
-    Context manager for observability with LangFuse.
+def _setup():
+    """Configure logfire + Langfuse once per container. Returns the client or None."""
+    global _langfuse_client, _setup_attempted
+    if _setup_attempted:
+        return _langfuse_client
+    _setup_attempted = True
 
-    Sets up LangFuse observability if environment variables are configured,
-    and ensures traces are flushed on exit.
-
-    Usage:
-        from observability import observe
-
-        with observe():
-            # Your code that uses OpenAI Agents SDK
-            result = await agent.run(...)
-    """
-    logger.info("🔍 Observability: Checking configuration...")
-
-    # Check if required environment variables exist
-    has_langfuse = bool(os.getenv("LANGFUSE_SECRET_KEY"))
-    has_openai = bool(os.getenv("OPENAI_API_KEY"))
-
-    logger.info(f"🔍 Observability: LANGFUSE_SECRET_KEY exists: {has_langfuse}")
-    logger.info(f"🔍 Observability: OPENAI_API_KEY exists: {has_openai}")
-
-    if not has_langfuse:
-        logger.info("🔍 Observability: LangFuse not configured, skipping setup")
-        yield None
-        return
-
-    if not has_openai:
-        logger.warning("⚠️  Observability: OPENAI_API_KEY not set, traces may not export")
-
-    # Local variable for the client (no global needed)
-    langfuse_client = None
-
-    # Try to set up LangFuse
     try:
         logger.info("🔍 Observability: Setting up LangFuse...")
 
@@ -57,16 +38,12 @@ def observe():
 
         # Configure logfire to instrument OpenAI Agents SDK
         logfire.configure(
-            service_name="alex_reporter_agent",
+            service_name=SERVICE_NAME,
             send_to_logfire=False,  # Don't send to Logfire cloud
         )
-        logger.info("✅ Observability: Logfire configured")
-
-        # Instrument OpenAI Agents SDK
         logfire.instrument_openai_agents()
         logger.info("✅ Observability: OpenAI Agents SDK instrumented")
 
-        # Initialize LangFuse client.
         # Langfuse SDK v4+ only exports LLM-looking spans by default, which would drop
         # logfire's "Agent run" / "Function" spans and break the trace tree - so keep them.
         Langfuse(
@@ -76,47 +53,58 @@ def observe():
                 and span.instrumentation_scope.name.startswith("logfire")
             )
         )
-        langfuse_client = get_client()
-        logger.info("✅ Observability: LangFuse client initialized")
+        _langfuse_client = get_client()
 
-        # Optional: Check authentication (blocking call, use sparingly)
+        # Blocking call, so only on the first (cold) invocation
         try:
-            auth_result = langfuse_client.auth_check()
-            logger.info(
-                f"✅ Observability: LangFuse authentication check passed (result: {auth_result})"
-            )
+            _langfuse_client.auth_check()
+            logger.info("✅ Observability: LangFuse authentication check passed")
         except Exception as auth_error:
             logger.warning(f"⚠️  Observability: Auth check failed but continuing: {auth_error}")
 
         logger.info("🎯 Observability: Setup complete - traces will be sent to LangFuse")
-
     except ImportError as e:
         logger.error(f"❌ Observability: Missing required package: {e}")
-        langfuse_client = None
+        _langfuse_client = None
     except Exception as e:
         logger.error(f"❌ Observability: Setup failed: {e}")
-        langfuse_client = None
+        _langfuse_client = None
 
+    return _langfuse_client
+
+
+@contextmanager
+def observe():
+    """
+    Context manager for observability with LangFuse.
+
+    Sets up LangFuse observability (once per container) if environment variables
+    are configured, and flushes this invocation's traces on exit.
+
+    Usage:
+        from observability import observe
+
+        with observe():
+            # Your code that uses OpenAI Agents SDK
+            pass
+    """
+    if not os.getenv("LANGFUSE_SECRET_KEY"):
+        logger.info("🔍 Observability: LangFuse not configured, skipping setup")
+        yield None
+        return
+
+    if not os.getenv("OPENAI_API_KEY"):
+        logger.warning("⚠️  Observability: OPENAI_API_KEY not set, traces may not export")
+
+    langfuse_client = _setup()
     try:
-        # Yield control back to the calling code
         yield langfuse_client
     finally:
-        # Flush traces on exit
         if langfuse_client:
             try:
-                logger.info("🔍 Observability: Flushing traces to LangFuse...")
+                # flush() blocks until queued spans are exported, so no sleep is
+                # needed (the old fixed 10-15s sleep added ~30s to every job)
                 langfuse_client.flush()
-                langfuse_client.shutdown()
-
-                # Add a 10 second delay to ensure network requests complete
-                # This is a workaround for Lambda's immediate termination
-                import time
-
-                logger.info("🔍 Observability: Waiting 10 seconds for flush to complete...")
-                time.sleep(10)
-
-                logger.info("✅ Observability: Traces flushed successfully")
+                logger.info("✅ Observability: Traces flushed")
             except Exception as e:
                 logger.error(f"❌ Observability: Failed to flush traces: {e}")
-        else:
-            logger.debug("🔍 Observability: No client to flush")
